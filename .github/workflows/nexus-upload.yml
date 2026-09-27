@@ -1,0 +1,74 @@
+# release-manager-nexus-v2
+name: Nexus upload (DylD0hh's Release Manager)
+run-name: Release Manager Nexus ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      file_id:
+        description: Persistent Nexus file ID (blank only for first v1.0 upload)
+        required: false
+        type: string
+      mod_id:
+        description: Existing Nexus mod ID
+        required: true
+        type: string
+      filename:
+        description: Approved player ZIP asset name
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      display_name:
+        required: true
+        type: string
+      description:
+        required: true
+        type: string
+      changelog:
+        required: true
+        type: string
+      archive_existing_version:
+        required: true
+        default: 'false'
+        type: string
+      tag:
+        description: Exact approved GitHub release tag
+        required: true
+        type: string
+      request_id:
+        description: Immutable Nova release record ID
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: release-manager-nexus-mod-${{ inputs.mod_id }}
+  cancel-in-progress: false
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload approved player ZIP through Nexus v3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+          MOD_ID: ${{ inputs.mod_id }}
+          FILE_ID: ${{ inputs.file_id }}
+          ZIP_NAME: ${{ inputs.filename }}
+          MOD_VERSION: ${{ inputs.version }}
+          DISPLAY_NAME: ${{ inputs.display_name }}
+          DESCRIPTION: ${{ inputs.description }}
+          CHANGELOG: ${{ inputs.changelog }}
+          ARCHIVE_EXISTING: ${{ inputs.archive_existing_version }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: node scripts/nexus-publish.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nova-nexus-result
+          path: nexus-result.json
+          if-no-files-found: ignore
+          retention-days: 90
