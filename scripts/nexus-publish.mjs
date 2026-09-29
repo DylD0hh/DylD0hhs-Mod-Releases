@@ -12,9 +12,15 @@ export async function publishNexus(p,{fetcher=fetch,checkpoint=async()=>{},wait=
  const verifyVersion=async versionId=>{
   const version=await api(`/mod-file-versions/${id(versionId)}`);
   if(String(version.id)!==String(versionId)||String(version.version).replace(/^v/,'')!==p.version)throw Error('Nexus returned a conflicting file version. Inspect before retrying.');
-  const fileId=id(version.file?.id),file=await api(`/mod-files/${fileId}`);
-  if(String(file.mod?.id)!==globalId||(p.fileId&&p.fileId!==fileId))throw Error('Nexus file chain does not match this mod.');
-  return {fileId,versionId:id(version.id),modId:p.modId,version:p.version,requestId:p.requestId,playerSha256:createHash('sha256').update(p.bytes).digest('hex'),pageStatus:file.mod.status||'unknown'};
+  const fileId=id(version.file?.id);
+  // GET mod-files returns aggregate file data, not a parent mod. Verify membership
+  // using the registered mod's inventory, refreshed after first-file creation.
+  const inventory=await api(`/mods/${globalId}/files`);
+  if(!inventory.mod_files?.some(f=>String(f.id)===fileId)||(p.fileId&&p.fileId!==fileId))throw Error('Nexus file chain does not match this mod.');
+  // This POST is Nexus's read-only batch lookup; it does not publish/edit a page.
+  const details=await api('/mods/batch','POST',{mod_ids:[globalId]});
+  const page=details.mods?.find(m=>String(m.id)===globalId);
+  return {fileId,versionId:id(version.id),modId:p.modId,version:p.version,requestId:p.requestId,playerSha256:createHash('sha256').update(p.bytes).digest('hex'),pageStatus:page?.status||'unknown'};
  };
  // Recovery is read-only and must name the already-created version explicitly.
  if(p.recoverVersionId)return await verifyVersion(p.recoverVersionId);
