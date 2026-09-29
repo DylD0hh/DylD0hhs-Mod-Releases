@@ -4,6 +4,10 @@ run-name: Release Manager Nexus ${{ inputs.request_id }}
 on:
   workflow_dispatch:
     inputs:
+      recover_version_id:
+        description: Recovery only - verified existing Nexus version ID; never uploads another ZIP
+        required: false
+        type: string
       file_id:
         description: Persistent Nexus file ID (blank only for first v1.0 upload)
         required: false
@@ -64,6 +68,7 @@ jobs:
           ARCHIVE_EXISTING: ${{ inputs.archive_existing_version }}
           RELEASE_TAG: ${{ inputs.tag }}
           REQUEST_ID: ${{ inputs.request_id }}
+          RECOVER_VERSION_ID: ${{ inputs.recover_version_id }}
         run: node scripts/nexus-publish.mjs
       - uses: actions/upload-artifact@v4
         if: always()
