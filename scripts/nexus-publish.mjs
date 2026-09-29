@@ -9,6 +9,15 @@ export async function publishNexus(p,{fetcher=fetch,checkpoint=async()=>{},wait=
  const api=async(path,method='GET',body)=>{let r;try{r=await fetcher('https://api.nexusmods.com/v3'+path,{method,headers:{apikey:p.apiKey,'Content-Type':'application/json','User-Agent':'DylD0hhs-Release-Manager'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(180000)});}catch{throw Error(`Nexus ${method} ${path.split('/')[1]} network failure; inspect the existing attempt before retrying.`);}log(`service=nexus operation=${method} ${path.replace(/[a-f0-9-]{20,}/gi,'{id}')} status=${r.status}`);if(!r.ok)throw Error(`Nexus ${method} ${path.split('/')[1]} HTTP ${r.status}. No credentials or raw response included.`);return (await r.json()).data;};
  const mod=await api('/games/7daystodie/mods/'+id(p.modId));if(String(mod.game_scoped_id)!==p.modId)throw Error('Nexus game-scoped identity mismatch');
  const globalId=id(mod.id),existing=await api(`/mods/${globalId}/files`);if(!Array.isArray(existing.mod_files))throw Error('Nexus file inventory unavailable');
+ const verifyVersion=async versionId=>{
+  const version=await api(`/mod-file-versions/${id(versionId)}`);
+  if(String(version.id)!==String(versionId)||String(version.version).replace(/^v/,'')!==p.version)throw Error('Nexus returned a conflicting file version. Inspect before retrying.');
+  const fileId=id(version.file?.id),file=await api(`/mod-files/${fileId}`);
+  if(String(file.mod?.id)!==globalId||(p.fileId&&p.fileId!==fileId))throw Error('Nexus file chain does not match this mod.');
+  return {fileId,versionId:id(version.id),modId:p.modId,version:p.version,requestId:p.requestId,playerSha256:createHash('sha256').update(p.bytes).digest('hex'),pageStatus:file.mod.status||'unknown'};
+ };
+ // Recovery is read-only and must name the already-created version explicitly.
+ if(p.recoverVersionId)return await verifyVersion(p.recoverVersionId);
  if(!p.fileId){if(p.version!=='1.0'||existing.mod_files.length)throw Error('First-file creation requires v1.0 and an empty Nexus page. Existing files need an explicit permanent mapping.');}
  else{if(!existing.mod_files.some(f=>String(f.id)===p.fileId))throw Error('Saved Nexus file does not belong to the registered mod page');const versions=await api(`/mod-files/${id(p.fileId)}/versions`);if(!Array.isArray(versions.versions)||versions.versions.some(v=>v.version.replace(/^v/,'')===p.version))throw Error('Nexus version exists or inventory is ambiguous. No duplicate will be created.');}
  // Persist a fail-closed attempt marker before ANY Nexus mutation. A lost response must not create a second chain.
@@ -21,9 +30,9 @@ export async function publishNexus(p,{fetcher=fetch,checkpoint=async()=>{},wait=
  await api(`/uploads/${id(upload.id)}/finalise`,'POST');let available=false;for(let n=0;n<60;n++){if((await api(`/uploads/${id(upload.id)}`)).state==='available'){available=true;break;}await wait(2000);}if(!available)throw Error('Nexus upload processing is still pending. Inspect before retrying.');
  const body={upload_id:upload.id,name:p.displayName,version:p.version,description:p.description,file_category:'main',primary_mod_manager_download:true,allow_mod_manager_download:true,show_requirements_pop_up:false,update_mod_version:true};
  let fileId=p.fileId,versionId;
- if(!fileId){const first=await api('/mod-files','POST',{...body,mod_id:globalId});fileId=id(first.id);const versions=await api(`/mod-files/${fileId}/versions`);const matching=versions.versions?.filter(v=>v.version.replace(/^v/,'')===p.version);if(matching?.length!==1)throw Error('First Nexus file created but version confirmation is ambiguous. Inspect before retrying.');versionId=id(matching[0].id);}
+ if(!fileId){const first=await api('/mod-files','POST',{...body,mod_id:globalId});versionId=id(first.id);log(`service=nexus operation=file.created version_id=${versionId}; inspect this version before any retry`);}
  else{const next=await api(`/mod-files/${id(fileId)}/versions`,'POST',{...body,archive_existing_file:p.archiveExisting});if(String(next.file?.id)!==fileId)throw Error('Nexus returned a different file chain');versionId=id(next.version?.id);}
- const result={fileId,versionId,modId:p.modId,version:p.version,requestId:p.requestId,playerSha256:createHash('sha256').update(p.bytes).digest('hex')};
+ const result=await verifyVersion(versionId);
  // File publication already succeeded; a changelog failure must not cause a duplicate upload retry.
  if(p.changelog)try{await api(`/mods/${globalId}/changelogs`,'POST',{version:p.version,changelog:p.changelog});}catch{result.warning='File uploaded; changelog needs manual follow-up.';log('service=nexus operation=changelog status=Warning');}
  return result;
@@ -41,9 +50,21 @@ async function main(){
  const release=JSON.parse(gh(['release','view',tag,'--repo',repo,'--json','body,isDraft,assets']));if(release.isDraft||!release.body.includes('nova-release:'+p.requestId))throw Error('Expected an approved public GitHub release');validateReleaseTag(tag,p.version,release.body);
  const marker=`nexus-attempt-${p.requestId}.json`,receipt=`nexus-result-${p.requestId}.json`;
  if(release.assets.some(a=>a.name===receipt)){gh(['release','download',tag,'--repo',repo,'--pattern',receipt]);writeFileSync('nexus-result.json',readFileSync(receipt));return;}
- if(release.assets.some(a=>a.name===marker))throw Error('An earlier Nexus attempt may have succeeded. Inspect Nexus and recover its receipt; automatic repetition is blocked.');
+ const recovery=process.env.RECOVER_VERSION_ID||'';
+ if(recovery&&!/^\d+$/.test(recovery))throw Error('Invalid recovery version ID');
+ if(release.assets.some(a=>a.name===marker)){
+  if(!recovery)throw Error('An earlier Nexus attempt may have succeeded. Inspect Nexus and recover its receipt; automatic repetition is blocked.');
+  gh(['release','download',tag,'--repo',repo,'--pattern',marker]);
+  const prior=JSON.parse(readFileSync(marker,'utf8'));
+  if(prior.requestId!==p.requestId||prior.modId!==p.modId||prior.version!==p.version||prior.sha256!==release.body.match(/SHA-256: ([a-f0-9]{64})/)?.[1])throw Error('Recovery does not match the original approved Nexus attempt');
+ }else if(recovery)throw Error('Recovery requires the original Nexus attempt marker');
+ p.recoverVersionId=recovery;
  gh(['release','download',tag,'--repo',repo,'--pattern',p.filename]);p.bytes=readFileSync(p.filename);const checksum=createHash('sha256').update(p.bytes).digest('hex');if(release.body.match(/SHA-256: ([a-f0-9]{64})/)?.[1]!==checksum)throw Error('Approved player ZIP checksum mismatch');
  const result=await publishNexus(p,{checkpoint:async()=>{writeFileSync(marker,JSON.stringify({requestId:p.requestId,modId:p.modId,version:p.version,sha256:checksum}));gh(['release','upload',tag,marker,'--repo',repo]);}});
+ if(result.pageStatus!=='published'){
+  writeFileSync('nexus-uploaded.json',JSON.stringify(result));
+  throw Error(`Nexus file is uploaded and verified: chain ${result.fileId}, version ${result.versionId}. Mod page visibility is ${result.pageStatus}. Publish the existing Nexus page, then use recover_version_id=${result.versionId}; do not upload again.`);
+ }
  writeFileSync('nexus-result.json',JSON.stringify(result));writeFileSync(receipt,JSON.stringify(result));gh(['release','upload',tag,receipt,'--repo',repo]);
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main().catch(e=>{console.error(e instanceof Error&&!('stderr' in e)?e.message:'GitHub workflow operation failed; inspect repository permissions and existing attempt.');process.exitCode=1;});
