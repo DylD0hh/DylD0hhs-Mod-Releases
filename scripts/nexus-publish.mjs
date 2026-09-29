@@ -28,11 +28,17 @@ export async function publishNexus(p,{fetcher=fetch,checkpoint=async()=>{},wait=
  if(p.changelog)try{await api(`/mods/${globalId}/changelogs`,'POST',{version:p.version,changelog:p.changelog});}catch{result.warning='File uploaded; changelog needs manual follow-up.';log('service=nexus operation=changelog status=Warning');}
  return result;
 }
+export function validateReleaseTag(tag,version,body){
+ if(!/^[1-9]\d{0,5}\.0$/.test(version))throw Error('Invalid stable release version');
+ if(tag===`v${version}`)return;
+ const identity=String(body).match(/<!-- nova-mod:([A-Za-z0-9_-]{2,80}) -->/)?.[1];
+ if(!identity||tag!==`${identity}-v${version}`)throw Error('Release tag conflicts with its permanent identity or stable version');
+}
 async function main(){
  const p={apiKey:process.env.NEXUSMODS_API_KEY,modId:process.env.MOD_ID||'',fileId:process.env.FILE_ID||'',filename:process.env.ZIP_NAME||'',version:process.env.MOD_VERSION||'',displayName:process.env.DISPLAY_NAME||'',description:process.env.DESCRIPTION||'',changelog:process.env.CHANGELOG||'',archiveExisting:process.env.ARCHIVE_EXISTING==='true',requestId:process.env.REQUEST_ID||''};
- if(!p.apiKey||!/^\d+$/.test(p.modId)||!/^\d+\.0$/.test(p.version)||!/^[a-f0-9-]{36}$/.test(p.requestId)||!/^v[1-9]\d*\.0$/.test(process.env.RELEASE_TAG||'')||!/^[A-Za-z0-9_. -]+\.zip$/.test(p.filename)||p.filename.startsWith('-'))throw Error('Invalid approved release inputs');
+ if(!p.apiKey||!/^\d+$/.test(p.modId)||!/^\d+\.0$/.test(p.version)||!/^[a-f0-9-]{36}$/.test(p.requestId)||!/^(?:[A-Za-z0-9_-]{2,80}-)?v[1-9]\d{0,5}\.0$/.test(process.env.RELEASE_TAG||'')||!/^[A-Za-z0-9_. -]+\.zip$/.test(p.filename)||p.filename.startsWith('-'))throw Error('Invalid approved release inputs');
  const repo=process.env.GITHUB_REPOSITORY,tag=process.env.RELEASE_TAG,gh=args=>execFileSync('gh',args,{encoding:'utf8',stdio:['ignore','pipe','pipe']});
- const release=JSON.parse(gh(['release','view',tag,'--repo',repo,'--json','body,isDraft,assets']));if(release.isDraft||!release.body.includes('nova-release:'+p.requestId))throw Error('Expected an approved public GitHub release');
+ const release=JSON.parse(gh(['release','view',tag,'--repo',repo,'--json','body,isDraft,assets']));if(release.isDraft||!release.body.includes('nova-release:'+p.requestId))throw Error('Expected an approved public GitHub release');validateReleaseTag(tag,p.version,release.body);
  const marker=`nexus-attempt-${p.requestId}.json`,receipt=`nexus-result-${p.requestId}.json`;
  if(release.assets.some(a=>a.name===receipt)){gh(['release','download',tag,'--repo',repo,'--pattern',receipt]);writeFileSync('nexus-result.json',readFileSync(receipt));return;}
  if(release.assets.some(a=>a.name===marker))throw Error('An earlier Nexus attempt may have succeeded. Inspect Nexus and recover its receipt; automatic repetition is blocked.');
