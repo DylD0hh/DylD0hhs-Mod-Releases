@@ -4,6 +4,11 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
+// Nexus's file editor allows 255 characters. Full listing copy belongs on the mod page.
+export function nexusFileDescription(description,displayName,version){
+ const compact=String(description||'').replace(/\s+/g,' ').trim();
+ return compact.length<=255?compact:`${String(displayName).slice(0,100)} (v${version}). Player download. Read the mod page for installation, requirements, compatibility and known issues.`;
+}
 export async function publishNexus(p,{fetcher=fetch,checkpoint=async()=>{},wait=ms=>new Promise(r=>setTimeout(r,ms)),log=console.log}={}){
  const id=v=>{if(!/^[A-Za-z0-9-]+$/.test(String(v||'')))throw Error('Invalid Nexus identifier');return String(v);};
  const api=async(path,method='GET',body)=>{let r;try{r=await fetcher('https://api.nexusmods.com/v3'+path,{method,headers:{apikey:p.apiKey,'Content-Type':'application/json','User-Agent':'DylD0hhs-Release-Manager'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(180000)});}catch{throw Error(`Nexus ${method} ${path.split('/')[1]} network failure; inspect the existing attempt before retrying.`);}log(`service=nexus operation=${method} ${path.replace(/[a-f0-9-]{20,}/gi,'{id}')} status=${r.status}`);if(!r.ok)throw Error(`Nexus ${method} ${path.split('/')[1]} HTTP ${r.status}. No credentials or raw response included.`);return (await r.json()).data;};
@@ -34,7 +39,7 @@ export async function publishNexus(p,{fetcher=fetch,checkpoint=async()=>{},wait=
  const parts=[];for(let n=0;n<upload.part_presigned_urls.length;n++){const bytes=p.bytes.subarray(n*Number(upload.part_size_bytes),(n+1)*Number(upload.part_size_bytes));const r=await external(upload.part_presigned_urls[n],{method:'PUT',body:bytes,headers:{'Content-Type':'application/octet-stream'}});const etag=r.headers.get('etag')?.replace(/"/g,'');if(!etag||!/^[-\w]+$/.test(etag))throw Error('Upload part confirmation missing');parts.push(`<Part><PartNumber>${n+1}</PartNumber><ETag>${etag}</ETag></Part>`);}
  const completed=await external(upload.complete_presigned_url,{method:'POST',headers:{'Content-Type':'application/xml'},body:`<CompleteMultipartUpload>${parts.join('')}</CompleteMultipartUpload>`});if((await completed.text()).includes('<Error>'))throw Error('Multipart completion returned an error');
  await api(`/uploads/${id(upload.id)}/finalise`,'POST');let available=false;for(let n=0;n<60;n++){if((await api(`/uploads/${id(upload.id)}`)).state==='available'){available=true;break;}await wait(2000);}if(!available)throw Error('Nexus upload processing is still pending. Inspect before retrying.');
- const body={upload_id:upload.id,name:p.displayName,version:p.version,description:p.description,file_category:'main',primary_mod_manager_download:true,allow_mod_manager_download:true,show_requirements_pop_up:false,update_mod_version:true};
+ const body={upload_id:upload.id,name:p.displayName,version:p.version,description:nexusFileDescription(p.description,p.displayName,p.version),file_category:'main',primary_mod_manager_download:true,allow_mod_manager_download:true,show_requirements_pop_up:false,update_mod_version:true};
  let fileId=p.fileId,versionId;
  if(!fileId){const first=await api('/mod-files','POST',{...body,mod_id:globalId});versionId=id(first.id);log(`service=nexus operation=file.created version_id=${versionId}; inspect this version before any retry`);}
  else{const next=await api(`/mod-files/${id(fileId)}/versions`,'POST',{...body,archive_existing_file:p.archiveExisting});if(String(next.file?.id)!==fileId)throw Error('Nexus returned a different file chain');versionId=id(next.version?.id);}
