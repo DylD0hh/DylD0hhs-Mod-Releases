@@ -73,8 +73,13 @@ async function main(){
  gh(['release','download',tag,'--repo',repo,'--pattern',p.filename]);p.bytes=readFileSync(p.filename);const checksum=createHash('sha256').update(p.bytes).digest('hex');if(release.body.match(/SHA-256: ([a-f0-9]{64})/)?.[1]!==checksum)throw Error('Approved player ZIP checksum mismatch');
  const result=await publishNexus(p,{checkpoint:async()=>{writeFileSync(marker,JSON.stringify({requestId:p.requestId,modId:p.modId,version:p.version,sha256:checksum}));gh(['release','upload',tag,marker,'--repo',repo]);}});
  if(result.pageStatus!=='published'){
-  writeFileSync('nexus-uploaded.json',JSON.stringify(result));
-  throw Error(`Nexus file is uploaded and verified: chain ${result.fileId}, version ${result.versionId}. Mod page visibility is ${result.pageStatus}. Publish the existing Nexus page, then use recover_version_id=${result.versionId}; do not upload again.`);
+  // A verified file on an unpublished page is a completed upload, awaiting site confirmation.
+  // Export its receipt so the app can open the correct page and later verify without reuploading.
+  const uploaded=`nexus-uploaded-${p.requestId}.json`;
+  writeFileSync('nexus-result.json',JSON.stringify(result));writeFileSync(uploaded,JSON.stringify(result));
+  if(!release.assets.some(a=>a.name===uploaded))gh(['release','upload',tag,uploaded,'--repo',repo]);
+  console.log(`service=nexus operation=publication.confirm status=Awaiting_confirmation file_id=${result.fileId} version_id=${result.versionId} page_status=${result.pageStatus}`);
+  return;
  }
  writeFileSync('nexus-result.json',JSON.stringify(result));writeFileSync(receipt,JSON.stringify(result));gh(['release','upload',tag,receipt,'--repo',repo]);
 }
