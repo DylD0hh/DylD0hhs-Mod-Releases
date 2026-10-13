@@ -1,0 +1,77 @@
+name: Nexus release preflight (read only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-manager-nexus-preflight
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify page identities, permanent file chains and target versions
+        env:
+          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {writeFileSync,appendFileSync} from 'node:fs';
+          class SafeFailure extends Error {}
+          const plans=[
+            {name:'Mod Manager',modId:'12870',fileId:'8048619',target:'2.0'},
+            {name:'SmartHorn',modId:'12888',fileId:'',target:'1.0'},
+            {name:'SmartHeadlights',modId:'12805',fileId:'',target:'1.0'},
+            {name:'SmartRefuel',modId:'12802',fileId:'8054556',target:'2.0'},
+            {name:'SmartWallet',modId:'12800',fileId:'8048901',target:'2.0'}
+          ];
+          const rows=[];
+          async function api(endpoint,method='GET',body){
+            if(!process.env.NEXUSMODS_API_KEY)throw new SafeFailure('NEXUSMODS_API_KEY is missing');
+            let response;
+            try{response=await fetch('https://api.nexusmods.com/v3'+endpoint,{
+              method,headers:{apikey:process.env.NEXUSMODS_API_KEY,'Content-Type':'application/json','User-Agent':'DylD0hhs-Release-Manager'},
+              body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(30000)
+            });}catch{throw new SafeFailure('Nexus '+method+' '+endpoint+' network failure');}
+            console.log('service=nexus operation='+method+' '+endpoint+' http_status='+response.status);
+            if(!response.ok)throw new SafeFailure('Nexus '+method+' '+endpoint+' HTTP '+response.status);
+            return (await response.json()).data;
+          }
+          for(const p of plans){
+            try{
+              const mod=await api('/games/7daystodie/mods/'+p.modId);
+              if(String(mod.game_scoped_id)!==p.modId)throw new SafeFailure('Game-scoped mod identity mismatch');
+              const inventory=await api('/mods/'+mod.id+'/files');
+              if(!Array.isArray(inventory.mod_files))throw new SafeFailure('File inventory shape unavailable');
+              let versions=[];
+              if(p.fileId){
+                if(!inventory.mod_files.some(f=>String(f.id)===p.fileId))throw new SafeFailure('Saved file chain is not present on this page');
+                const existing=await api('/mod-files/'+p.fileId+'/versions');
+                if(!Array.isArray(existing.versions))throw new SafeFailure('Version inventory shape unavailable');
+                versions=existing.versions.map(v=>String(v.version).replace(/^v/,''));
+                if(versions.includes(p.target))throw new SafeFailure('Target version already exists; reconcile before upload');
+                if(versions.some(v=>/^\d+\.0$/.test(v)&&Number(v.split('.')[0])>Number(p.target.split('.')[0])))throw new SafeFailure('A newer stable version exists');
+              }else if(inventory.mod_files.length)throw new SafeFailure('First-release page already has files; existing chain must be reconciled');
+              // Nexus documents this POST as a read-only batch lookup, not a publication operation.
+              const batch=await api('/mods/batch','POST',{mod_ids:[String(mod.id)]});
+              const page=batch.mods?.find(m=>String(m.id)===String(mod.id));
+              rows.push({...p,status:'Pass',globalModId:String(mod.id),existingFileCount:inventory.mod_files.length,existingVersions:versions,pageStatus:page?.status||'unknown'});
+            }catch(e){rows.push({...p,status:'Needs review',safeError:e instanceof SafeFailure?e.message:'Nexus response could not be verified'});}
+          }
+          const report={checkedAtUtc:new Date().toISOString(),scope:'Read-only Nexus identity/file/version preflight; no upload, edit, finalise or publication',rows,publicationPerformed:false};
+          writeFileSync('nexus-preflight.json',JSON.stringify(report,null,2)+'\n');
+          console.log(JSON.stringify(report,null,2));
+          if(process.env.GITHUB_STEP_SUMMARY)appendFileSync(process.env.GITHUB_STEP_SUMMARY,'## Nexus read-only preflight\n\n'+rows.map(r=>'- '+r.name+' '+r.target+': '+r.status+(r.safeError?' — '+r.safeError:'; page '+r.pageStatus)).join('\n')+'\n');
+          if(rows.some(r=>r.status!=='Pass'))process.exitCode=1;
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nexus-read-only-preflight
+          path: nexus-preflight.json
+          if-no-files-found: error
+          retention-days: 30
+
