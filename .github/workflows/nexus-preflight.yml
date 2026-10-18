@@ -52,7 +52,8 @@ jobs:
                 if(!inventory.mod_files.some(f=>String(f.id)===p.fileId))throw new SafeFailure('Saved file chain is not present on this page');
                 const existing=await api('/mod-files/'+p.fileId+'/versions');
                 if(!Array.isArray(existing.versions))throw new SafeFailure('Version inventory shape unavailable');
-                versions=existing.versions.map(v=>String(v.version).replace(/^v/,''));
+                console.log(JSON.stringify({service:'nexus',operation:'file-chain-inspection',modId:p.modId,fileId:p.fileId,versions:existing.versions.map(v=>({id:String(v.id),fileId:String(v.file?.id||''),gameScopedId:String(v.game_scoped_id||''),version:String(v.version),name:String(v.name||''),category:String(v.category||''),uploadedAt:String(v.uploaded_at||'')}))}));
+              versions=existing.versions.map(v=>String(v.version).replace(/^v/,''));
                 if(versions.includes(p.target))throw new SafeFailure('Target version already exists; reconcile before upload');
                 if(versions.some(v=>/^\d+\.0$/.test(v)&&Number(v.split('.')[0])>Number(p.target.split('.')[0])))throw new SafeFailure('A newer stable version exists');
               }else if(inventory.mod_files.length)throw new SafeFailure('First-release page already has files; existing chain must be reconciled');
@@ -75,3 +76,4 @@ jobs:
           path: nexus-preflight.json
           if-no-files-found: error
           retention-days: 30
+
