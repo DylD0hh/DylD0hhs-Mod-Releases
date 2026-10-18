@@ -42,7 +42,9 @@ export async function publishNexus(p,{fetcher=fetch,checkpoint=async()=>{},wait=
  const body={upload_id:upload.id,name:p.displayName,version:p.version,description:nexusFileDescription(p.description,p.displayName,p.version),file_category:'main',primary_mod_manager_download:true,allow_mod_manager_download:true,show_requirements_pop_up:false,update_mod_version:true};
  let fileId=p.fileId,versionId;
  if(!fileId){const first=await api('/mod-files','POST',{...body,mod_id:globalId});versionId=id(first.id);log(`service=nexus operation=file.created version_id=${versionId}; inspect this version before any retry`);}
- else{const next=await api(`/mod-files/${id(fileId)}/versions`,'POST',{...body,archive_existing_file:p.archiveExisting});if(String(next.file?.id)!==fileId)throw Error('Nexus returned a different file chain');versionId=id(next.version?.id);}
+ else{const next=await api(`/mod-files/${id(fileId)}/versions`,'POST',{...body,archive_existing_file:p.archiveExisting});versionId=id(next.version?.id);log(`service=nexus operation=version.created version_id=${versionId}; verify the authoritative version before any retry`);}
+ // The upload response's file projection is not authoritative chain membership.
+ // verifyVersion reads the created version and still requires the exact saved chain.
  const result=await verifyVersion(versionId);
  // File publication already succeeded; a changelog failure must not cause a duplicate upload retry.
  if(p.changelog)try{await api(`/mods/${globalId}/changelogs`,'POST',{version:p.version,changelog:p.changelog});}catch{result.warning='File uploaded; changelog needs manual follow-up.';log('service=nexus operation=changelog status=Warning');}
