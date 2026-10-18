@@ -23,6 +23,7 @@ jobs:
           class SafeFailure extends Error {}
           const plans=[
             {name:'Mod Manager',modId:'12870',fileId:'8048619',target:'2.0'},
+            {name:'SmartRead',modId:'12801',fileId:'8054454',target:'2.0'},
             {name:'SmartHorn',modId:'12888',fileId:'',target:'1.0'},
             {name:'SmartHeadlights',modId:'12805',fileId:'',target:'1.0'},
             {name:'SmartRefuel',modId:'12802',fileId:'8054556',target:'2.0'},
@@ -74,4 +75,3 @@ jobs:
           path: nexus-preflight.json
           if-no-files-found: error
           retention-days: 30
-
